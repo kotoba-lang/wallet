@@ -1,0 +1,16 @@
+;; wallet — non-custodial multi-chain wallet (MetaMask/Coinbase Wallet-shaped):
+;; a single BIP-32/39/44 seed, a ChainDriver registry (:eth, :btc), real
+;; SIWE/EIP-4361 (personal_sign + ecrecover, verifiable by real Ethereum
+;; tooling), and a local encrypted-keystore shape. Builds on btc-crypto
+;; (shared secp256k1 HD tree + BTC addresses/tx) and eth-crypto (ETH
+;; addresses/tx/keccak) rather than re-deriving them.
+{:paths ["src"]
+ :deps {io.github.kotoba-lang/btc-crypto {:git/sha "a9109c4507c6f1f2b0b90cdf202efa6b02150e27"}
+        io.github.kotoba-lang/eth-crypto {:git/sha "eebb35b56c1ddb7987b053bdf0c789c77c22c10f"}
+        io.github.kotoba-lang/crypto     {:git/sha "c4f825c166c0095f7b020c503c56a0a1fb10af07"}}
+ :aliases
+ {:test {:extra-paths ["test"]
+         :extra-deps {io.github.cognitect-labs/test-runner
+                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+         :main-opts ["-m" "cognitect.test-runner"]
+         :exec-fn cognitect.test-runner.api/test}}}
