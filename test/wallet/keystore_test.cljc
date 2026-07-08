@@ -2,7 +2,7 @@
   (:require [clojure.test :refer [deftest is]]
             [wallet.keystore :as ks]))
 
-(def ^:private privkey (byte-array (range 32)))
+(def ^:private privkey #?(:clj (byte-array (range 32)) :cljs (into-array (range 32))))
 
 (deftest round-trip
   (let [encrypted (ks/encrypt-keystore privkey "correct horse battery staple" 1000)
@@ -16,9 +16,10 @@
 (deftest tampered-ciphertext-rejected
   (let [encrypted (ks/encrypt-keystore privkey "correct horse battery staple" 1000)
         tampered (update encrypted :ciphertext (fn [^bytes ct]
-                                                  (let [c (aclone ct)]
-                                                    (aset-byte c 0 (unchecked-byte (bit-xor (aget c 0) 1)))
-                                                    c)))]
+                                                  #?(:clj (let [c (aclone ct)]
+                                                            (aset-byte c 0 (unchecked-byte (bit-xor (aget c 0) 1)))
+                                                            c)
+                                                     :cljs ct)))]
     (is (thrown? #?(:clj Exception :cljs js/Error) (ks/decrypt-keystore tampered "correct horse battery staple")))))
 
 (deftest each-encryption-uses-a-fresh-nonce-and-salt

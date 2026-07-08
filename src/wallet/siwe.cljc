@@ -35,14 +35,16 @@
 ;; ─── personal_sign (EIP-191 \x19 prefix) ─────────────────────────────────
 
 (defn- concat-bytes ^bytes [arrays]
-  (let [total (reduce (fn [^long n ^bytes a] (+ n (alength a))) 0 arrays)
-        out (byte-array total)]
-    (loop [off 0 as arrays]
-      (if (seq as)
-        (let [^bytes a (first as)]
-          (System/arraycopy a 0 out off (alength a))
-          (recur (+ off (alength a)) (rest as)))
-        out))))
+  #?(:clj
+     (let [total (reduce (fn [^long n ^bytes a] (+ n (alength a))) 0 arrays)
+           out (byte-array total)]
+       (loop [off 0 as arrays]
+         (if (seq as)
+           (let [^bytes a (first as)]
+             (System/arraycopy a 0 out off (alength a))
+             (recur (+ off (alength a)) (rest as)))
+           out)))
+     :cljs (throw (js/Error. "wallet.siwe: not yet implemented for cljs"))))
 
 (defn personal-sign-digest
   "The keccak256 digest actually signed by MetaMask's `personal_sign` /
@@ -57,16 +59,18 @@
   "Sign `msg` with a 32-byte `privkey`, personal_sign-style. Returns the
   0x… 65-byte (r‖s‖v, v∈{27,28}) hex signature."
   ^String [^String msg ^bytes privkey]
-  (let [digest (personal-sign-digest msg)
-        {:keys [r s recovery-id]} (eth/secp256k1-sign privkey digest)
-        v (+ 27 recovery-id)
-        r32 (let [^bytes b (.toByteArray ^java.math.BigInteger r) n (alength b) out (byte-array 32)]
-              (if (<= n 32) (do (System/arraycopy b 0 out (- 32 n) n) out)
-                  (java.util.Arrays/copyOfRange b (- n 32) n)))
-        s32 (let [^bytes b (.toByteArray ^java.math.BigInteger s) n (alength b) out (byte-array 32)]
-              (if (<= n 32) (do (System/arraycopy b 0 out (- 32 n) n) out)
-                  (java.util.Arrays/copyOfRange b (- n 32) n)))]
-    (str "0x" (eth/bytes->hex (concat-bytes [r32 s32 (byte-array [(unchecked-byte v)])])) )))
+  #?(:clj
+     (let [digest (personal-sign-digest msg)
+           {:keys [r s recovery-id]} (eth/secp256k1-sign privkey digest)
+           v (+ 27 recovery-id)
+           r32 (let [^bytes b (.toByteArray ^java.math.BigInteger r) n (alength b) out (byte-array 32)]
+                 (if (<= n 32) (do (System/arraycopy b 0 out (- 32 n) n) out)
+                     (java.util.Arrays/copyOfRange b (- n 32) n)))
+           s32 (let [^bytes b (.toByteArray ^java.math.BigInteger s) n (alength b) out (byte-array 32)]
+                 (if (<= n 32) (do (System/arraycopy b 0 out (- 32 n) n) out)
+                     (java.util.Arrays/copyOfRange b (- n 32) n)))]
+       (str "0x" (eth/bytes->hex (concat-bytes [r32 s32 (byte-array [(unchecked-byte v)])])) ))
+     :cljs (throw (js/Error. "wallet.siwe: not yet implemented for cljs"))))
 
 (defn verify-message
   "Recover the signer address from `msg` + `sig-hex` (0x… 65-byte) and check
