@@ -28,7 +28,7 @@
 
 (deftest sign-in-verifies
   (let [result (siwe/sign-in opts (:private-key acct))]
-    (is (true? (siwe/verify-sign-in result)))))
+    (is (:ok? (siwe/verify-sign-in result {:expected-domain "kotobase.net"})))))
 
 (deftest tampered-message-fails-verification
   (let [result (siwe/sign-in opts (:private-key acct))]
@@ -38,3 +38,67 @@
   (let [result (siwe/sign-in opts (:private-key acct))]
     (is (false? (siwe/verify-message (:message result) (:signature result)
                                       "0x0000000000000000000000000000000000000000")))))
+
+(deftest parse-message-round-trips-the-signed-fields
+  (let [result (siwe/sign-in (assoc opts :expiration-time "2026-07-01T00:05:00Z"
+                                    :not-before "2026-06-30T23:55:00Z") (:private-key acct))
+        parsed (siwe/parse-message (:message result))]
+    (is (= "kotobase.net" (:domain parsed)))
+    (is (= (:address acct) (:address parsed)))
+    (is (= "abcd1234" (:nonce parsed)))
+    (is (= "2026-07-01T00:00:00Z" (:issued-at parsed)))
+    (is (= "2026-07-01T00:05:00Z" (:expiration-time parsed)))
+    (is (= "2026-06-30T23:55:00Z" (:not-before parsed)))))
+
+(deftest verify-sign-in-rejects-a-signature-that-does-not-recover-to-address
+  (let [result (siwe/sign-in opts (:private-key acct))
+        tampered (update result :message #(str % "x"))]
+    (is (= {:ok? false :reason :bad-signature}
+           (siwe/verify-sign-in tampered {:expected-domain "kotobase.net"})))))
+
+(deftest verify-sign-in-rejects-a-replay-on-a-different-domain
+  ;; CONFIRMED BUG regression: verify-sign-in used to check ONLY the
+  ;; signature, so a message signed for kotobase.net verified true when
+  ;; replayed against a completely different (attacker-controlled) domain --
+  ;; exactly the cross-site phishing threat SIWE's domain field exists to
+  ;; prevent.
+  (let [result (siwe/sign-in opts (:private-key acct))]
+    (is (= {:ok? false :reason :domain-mismatch}
+           (siwe/verify-sign-in result {:expected-domain "phishing-attacker.com"})))))
+
+(deftest verify-sign-in-rejects-an-expired-message
+  ;; CONFIRMED BUG regression: a message's declared Expiration Time was
+  ;; never checked, so a captured signed message could be replayed forever.
+  (let [bounded-opts (assoc opts :issued-at "2026-07-01T00:00:00Z"
+                            :expiration-time "2026-07-01T00:05:00Z")
+        result (siwe/sign-in bounded-opts (:private-key acct))]
+    (is (= {:ok? true :reason :verified}
+           (siwe/verify-sign-in result {:expected-domain "kotobase.net" :now "2026-07-01T00:02:00Z"})))
+    (is (= {:ok? false :reason :expired}
+           (siwe/verify-sign-in result {:expected-domain "kotobase.net" :now "2026-07-01T00:10:00Z"})))))
+
+(deftest verify-sign-in-rejects-a-not-yet-valid-message
+  (let [bounded-opts (assoc opts :not-before "2026-07-01T00:10:00Z")
+        result (siwe/sign-in bounded-opts (:private-key acct))]
+    (is (= {:ok? false :reason :not-yet-valid}
+           (siwe/verify-sign-in result {:expected-domain "kotobase.net" :now "2026-07-01T00:00:00Z"})))
+    (is (= {:ok? true :reason :verified}
+           (siwe/verify-sign-in result {:expected-domain "kotobase.net" :now "2026-07-01T00:15:00Z"})))))
+
+(deftest verify-sign-in-fails-closed-when-message-is-bounded-but-now-is-omitted
+  (let [bounded-opts (assoc opts :expiration-time "2026-07-01T00:05:00Z")
+        result (siwe/sign-in bounded-opts (:private-key acct))]
+    (is (= {:ok? false :reason :now-required}
+           (siwe/verify-sign-in result {:expected-domain "kotobase.net"})))))
+
+(deftest verify-sign-in-does-not-require-now-when-the-message-declares-no-expiry
+  (let [result (siwe/sign-in opts (:private-key acct))]
+    (is (= {:ok? true :reason :verified}
+           (siwe/verify-sign-in result {:expected-domain "kotobase.net"})))))
+
+(deftest verify-sign-in-checks-expected-nonce-when-supplied
+  (let [result (siwe/sign-in opts (:private-key acct))]
+    (is (= {:ok? true :reason :verified}
+           (siwe/verify-sign-in result {:expected-domain "kotobase.net" :expected-nonce "abcd1234"})))
+    (is (= {:ok? false :reason :nonce-mismatch}
+           (siwe/verify-sign-in result {:expected-domain "kotobase.net" :expected-nonce "a-stale-reused-nonce"})))))

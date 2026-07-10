@@ -82,6 +82,29 @@
         recovered (eth/ecrecover-checksum digest sig)]
     (= (str/lower-case recovered) (str/lower-case expected-address))))
 
+(defn parse-message
+  "Parse an EIP-4361 plaintext (as produced by `message`) back into its
+  structured fields — the inverse of `message`, needed so `verify-sign-in`
+  can check what was ACTUALLY signed (domain, nonce, expiry window) against
+  the relying party's own expectations, not just that some signature exists."
+  [^String msg]
+  (let [lines (str/split-lines msg)
+        field (fn [label]
+                (some (fn [l] (when (str/starts-with? l (str label ": "))
+                                (subs l (+ 2 (count label)))))
+                      lines))]
+    {:domain (some-> (first lines)
+                     (str/replace #" wants you to sign in with your Ethereum account:$" ""))
+     :address (second lines)
+     :uri (field "URI")
+     :version (field "Version")
+     :chain-id (field "Chain ID")
+     :nonce (field "Nonce")
+     :issued-at (field "Issued At")
+     :expiration-time (field "Expiration Time")
+     :not-before (field "Not Before")
+     :request-id (field "Request ID")}))
+
 ;; ─── convenience: sign-in / verify a full SIWE flow ──────────────────────
 
 (defn sign-in
@@ -94,6 +117,57 @@
      :address (:address opts)}))
 
 (defn verify-sign-in
-  "Verify a `sign-in` result: the signature recovers to :address."
-  [{:keys [message signature address]}]
-  (verify-message message signature address))
+  "Verify a `sign-in` result against the relying party's OWN expectations —
+  not just that the signature recovers to :address (verify-message's job),
+  but the SIWE domain-binding + freshness checks EIP-4361 exists for.
+  Confirmed bug this closes: previously verify-sign-in checked ONLY the
+  signature, so a captured signed message replayed forever on ANY domain
+  (no domain binding) after its own declared expiry (no freshness check)
+  still verified true — the two headline threats SIWE's domain+nonce fields
+  exist to prevent.
+
+    signed : a `sign-in` result, {:message :signature :address}
+    opts   : {:expected-domain <the RP's OWN domain, REQUIRED — a message
+                                signed for a different domain must never
+                                verify here, closing the cross-site replay/
+                                phishing gap>
+              :now <ISO8601 UTC \"…Z\" instant, comparable via string
+                    `compare` to issued-at/expiration-time/not-before (all
+                    caller-supplied in that same format) — REQUIRED only
+                    when the signed message itself declares an
+                    expiration-time/not-before window (both are optional
+                    per EIP-4361; when neither is present, freshness isn't
+                    bounded and `now` isn't needed)>
+              :expected-nonce <optional — when supplied, must match the
+                    signed message's nonce. This function only compares
+                    string equality; nonce STORAGE/single-use/uniqueness
+                    remains the caller's responsibility (this is a pure
+                    crypto/parsing library, not a nonce store)>}
+  -> {:ok? bool :reason kw}. A signature that doesn't recover to :address,
+  a domain that doesn't match :expected-domain, a declared expiry window
+  with no :now supplied to check it, `now` outside [not-before,
+  expiration-time], or a nonce that doesn't match :expected-nonce when
+  supplied, all reject."
+  [{:keys [message signature address]} {:keys [expected-domain now expected-nonce]}]
+  (let [parsed (parse-message message)
+        bounded? (or (:expiration-time parsed) (:not-before parsed))]
+    (cond
+      (not (verify-message message signature address))
+      {:ok? false :reason :bad-signature}
+
+      (not= (:domain parsed) expected-domain)
+      {:ok? false :reason :domain-mismatch}
+
+      (and bounded? (nil? now))
+      {:ok? false :reason :now-required}
+
+      (and (:not-before parsed) (neg? (compare now (:not-before parsed))))
+      {:ok? false :reason :not-yet-valid}
+
+      (and (:expiration-time parsed) (not (neg? (compare now (:expiration-time parsed)))))
+      {:ok? false :reason :expired}
+
+      (and expected-nonce (not= (:nonce parsed) expected-nonce))
+      {:ok? false :reason :nonce-mismatch}
+
+      :else {:ok? true :reason :verified})))
