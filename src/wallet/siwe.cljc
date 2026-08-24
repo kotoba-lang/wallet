@@ -9,7 +9,8 @@
   wallet MetaMask/Coinbase-Wallet-compatible for dApp login, not just
   SIWE-shaped."
   (:require [clojure.string :as str]
-            [eth-crypto.core :as eth]))
+            [eth-crypto.core :as eth]
+            [wallet.signer :as signer]))
 
 (defn message
   "The EIP-4361 plaintext to sign. `address` is the EIP-55 checksummed 0x…
@@ -72,6 +73,17 @@
        (str "0x" (eth/bytes->hex (concat-bytes [r32 s32 (byte-array [(unchecked-byte v)])])) ))
      :cljs (throw (js/Error. "wallet.siwe: not yet implemented for cljs"))))
 
+(defn sign-message-with
+  "personal_sign `msg` through a wallet.signer/Signer at `path` — the digest
+  goes to the signer, the key never comes here. Byte-identical to
+  `sign-message` with the same key (the parity tests pin this)."
+  ^String [^String msg sgnr path]
+  #?(:clj
+     (str "0x" (eth/bytes->hex
+                (eth/signature->bytes
+                 (signer/sign-digest! sgnr path (personal-sign-digest msg)))))
+     :cljs (throw (js/Error. "wallet.siwe: not yet implemented for cljs"))))
+
 (defn verify-message
   "Recover the signer address from `msg` + `sig-hex` (0x… 65-byte) and check
   it matches `expected-address` (case-insensitive — both are EIP-55
@@ -114,6 +126,17 @@
   (let [msg (message opts)]
     {:message msg
      :signature (sign-message msg privkey)
+     :address (:address opts)}))
+
+(defn sign-in-with
+  "Like `sign-in`, but signed through a wallet.signer/Signer at `path` —
+  the SIWE proof-of-ownership a self-custodied (kagi-backed) wallet uses to
+  attach itself as a signer, exactly where an injected wallet (MetaMask)
+  would have signed. Returns {:message :signature :address}."
+  [opts sgnr path]
+  (let [msg (message opts)]
+    {:message msg
+     :signature (sign-message-with msg sgnr path)
      :address (:address opts)}))
 
 (defn verify-sign-in
