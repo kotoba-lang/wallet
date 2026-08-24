@@ -24,7 +24,8 @@
     results carry NO private key; signing is delegated to a Signer
     (kagi.chain-signer in production), which is the only component that
     ever touches key material."
-  (:require [btc-crypto.bip32 :as bip32]
+  (:require [btc-crypto.base58 :as base58]
+            [btc-crypto.bip32 :as bip32]
             [btc-crypto.core :as btc]
             [btc-crypto.tx :as btc-tx]
             [eth-crypto.core :as eth]
@@ -128,6 +129,38 @@
           :p2wpkh (btc-tx/sign-p2wpkh (:tx tx) (:input-index tx) (:amount tx) privkey)
           :p2pkh (btc-tx/sign-legacy-p2pkh (:tx tx) (:input-index tx) privkey))))))
 
+;; ─── TRON (address = the EVM address re-wrapped: 0x41 ‖ last20(keccak256
+;;     (pubkey)), base58check with Bitcoin's sha256d checksum — a composition
+;;     of two mechanisms already verified in eth-crypto and btc-crypto) ─────
+
+(defn- tron-addresses [pub64]
+  #?(:clj
+     (let [payload (byte-array (cons (unchecked-byte 0x41)
+                                     (drop 12 (seq (eth/keccak256 pub64)))))]
+       {:address (base58/encode-check payload)
+        :hex-address (eth/bytes->hex payload)})
+     :cljs (throw (js/Error. "wallet.chain: TRON addresses not yet implemented for cljs"))))
+
+(defn tron-driver
+  "ChainDriver for TRON. Addresses are implemented; tx signing is REFUSED
+  with the missing mechanism named — TRON's raw-data protobuf assembly.
+  (The signature itself, secp256k1 over sha256(raw-data), is exactly what
+  the signer seam already provides once the tx bytes exist.)"
+  [entry]
+  (reify ChainDriver
+    (bip44-path [_ account change index]
+      (str "m/44'/" (:coin-type entry) "'/" account "'/" change "/" index))
+    (address-of [_ privkey]
+      (tron-addresses #?(:clj (eth/private->public privkey)
+                         :cljs (throw (js/Error. "wallet.chain: :clj-only")))))
+    (address-of-pub [_ pub64]
+      (tron-addresses pub64))
+    (sign-tx* [_ _ _]
+      (throw (ex-info "wallet.chain: TRON tx signing needs raw-data protobuf assembly, which is not implemented — refusing rather than signing bytes this library cannot canonicalize"
+                      {:reason :wallet.chain/tx-format-not-implemented
+                       :chain :trx
+                       :needs "TRON raw-data protobuf assembly (the secp256k1-over-sha256 signature the seam already provides)"})))))
+
 ;; ─── driver registry (built from the data table) ─────────────────────────
 
 (defn driver-for
@@ -138,7 +171,8 @@
   (let [entry (chains/entry chain)]
     (case (:family entry)
       :evm (evm-driver entry)
-      :utxo (utxo-driver entry))))
+      :utxo (utxo-driver entry)
+      :tron (tron-driver entry))))
 
 (def eth-driver (evm-driver (get chains/chains :eth)))
 (def btc-driver (utxo-driver (get chains/chains :btc)))
@@ -230,27 +264,65 @@
                                    (byte-str to) (num-bytes value) (byte-str data)
                                    (num-bytes v) (num-bytes r) (num-bytes s)]))))))
 
-(defn sign-tx-with
-  "Sign an EVM `tx` for a signer-backed account ({:chain :path}, from
-  `account-with`) via wallet.signer — the digest goes to the Signer, the key
-  never comes here. EIP-1559 when :max-fee-per-gas is present, EIP-155
-  legacy otherwise; :chain-id is injected from the registry when absent and
-  a mismatch is refused.
+#?(:clj
+   (defn- der-sig-with-type
+     "DER-encode {:r :s} and append the SIGHASH_ALL byte — the exact assembly
+     btc-crypto.tx's own sign fns produce, so the parity tests can compare
+     byte-for-byte."
+     ^bytes [sig]
+     (let [^bytes der (btc-tx/der-encode-sig sig)]
+       (byte-array (concat (seq der) [(unchecked-byte btc-tx/sighash-all)])))))
 
-  EVM-only today, honestly: UTXO signing still requires the private key
-  (btc-crypto.tx computes sighashes internally) — named as follow-up in the
-  wallet-signer-seam ADR."
+#?(:clj
+   (defn- utxo-sign-with
+     "Signer-seam counterpart of utxo-driver's sign-tx*: same sighash
+     (btc-crypto.tx's legacy/BIP-143 digests, verified there against the
+     official BIP-143 vector), same deterministic RFC-6979 signature (the
+     Signer signs the digest with the same eth-crypto primitive
+     btc-crypto.tx uses), same witness/scriptSig assembly — with the private
+     key never leaving the Signer."
+     [sgnr entry path {:keys [script-type] :as tx}]
+     (when (:receive-only? entry)
+       (throw (ex-info (str "wallet.chain: " (:name entry) " is RECEIVE-ONLY here — "
+                            "btc-crypto does not implement its spend digest (SIGHASH_FORKID); "
+                            "refusing to emit a signature the network would reject")
+                       {:reason :wallet.chain/receive-only :chain (:network entry)})))
+     (let [net (:network entry)
+           pubkey (signer/compress (signer/public-key64 sgnr path))
+           script-code (btc-tx/p2pkh-script (btc/hash160 pubkey))]
+       (case (or script-type (if (:segwit? (btc/network net)) :p2wpkh :p2pkh))
+         :p2wpkh
+         (let [sighash (btc-tx/bip143-sighash (:tx tx) (:input-index tx)
+                                              script-code (:amount tx) btc-tx/sighash-all)]
+           {:witness [(der-sig-with-type (signer/sign-digest! sgnr path sighash)) pubkey]})
+         :p2pkh
+         (let [sighash (btc-tx/legacy-sighash (:tx tx) (:input-index tx)
+                                              script-code btc-tx/sighash-all)]
+           {:der-sig-with-type (der-sig-with-type (signer/sign-digest! sgnr path sighash))
+            :pubkey pubkey})))))
+
+(defn sign-tx-with
+  "Sign `tx` for a signer-backed account ({:chain :path}, from
+  `account-with`) via wallet.signer — the digest goes to the Signer, the key
+  never comes here.
+
+  :evm  — EIP-1559 when :max-fee-per-gas is present, EIP-155 legacy
+          otherwise; :chain-id injected from the registry when absent, a
+          mismatch refused.
+  :utxo — legacy P2PKH and BIP-143 P2WPKH SIGHASH_ALL, same tx shape as
+          `sign-tx` (:tx :input-index :amount :script-type); BCH refused as
+          receive-only.
+  :tron — refused: the tx raw-data assembly is not implemented (the driver
+          names what is missing)."
   [sgnr {:keys [chain path]} tx]
   #?(:clj
      (let [entry (chains/entry chain)]
-       (when-not (= :evm (:family entry))
-         (throw (ex-info (str "wallet.chain: signer-backed tx signing is EVM-only today ("
-                              (pr-str chain) " is " (:family entry)
-                              ") — UTXO needs btc-crypto.tx to accept an external signature")
-                         {:reason :wallet.chain/signer-family-unsupported
-                          :chain chain :family (:family entry)})))
-       (let [tx (ensure-chain-id entry tx)]
-         (if (eip1559? tx)
-           (eth/eip1559-raw tx (signer/sign-digest! sgnr path (eth/eip1559-digest tx)))
-           (legacy-raw tx (signer/sign-digest! sgnr path (eth/legacy-digest tx))))))
+       (case (:family entry)
+         :evm (let [tx (ensure-chain-id entry tx)]
+                (if (eip1559? tx)
+                  (eth/eip1559-raw tx (signer/sign-digest! sgnr path (eth/eip1559-digest tx)))
+                  (legacy-raw tx (signer/sign-digest! sgnr path (eth/legacy-digest tx)))))
+         :utxo (utxo-sign-with sgnr entry path tx)
+         ;; other families: the driver carries its own named refusal
+         (sign-tx* (driver-for chain) nil tx)))
      :cljs (throw (js/Error. "wallet.chain/sign-tx-with: not yet implemented for cljs"))))
