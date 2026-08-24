@@ -8,8 +8,10 @@
   refused for the reason it names)."
   (:require [clojure.test :refer [deftest is]]
             [clojure.string :as str]
+            [btc-crypto.base58 :as base58]
             [btc-crypto.bip32 :as bip32]
             [btc-crypto.bip39 :as bip39]
+            [eth-crypto.core :as eth]
             [wallet.chain :as w]
             [wallet.chains :as chains]
             [wallet.signer :as signer]
@@ -119,10 +121,64 @@
   (is (= :wallet.chain/receive-only
          (refusal-reason #(w/sign-tx (w/account master :bch) {})))))
 
-(deftest utxo-signer-tx-refused-honestly
-  ;; UTXO tx signing through the seam is follow-up work, not silently absent.
-  (is (= :wallet.chain/signer-family-unsupported
-         (refusal-reason #(w/sign-tx-with sgnr (w/account-with sgnr :btc) {})))))
+;; ─── UTXO tx parity through the seam (byte arrays compared via seq —
+;;     `=` on byte arrays is identity, and two green constants would hide a
+;;     broken assembly) ──────────────────────────────────────────────────────
+
+(def ^:private utxo-tx
+  ;; input/output shapes as btc-crypto.tx's own BIP-143 vector test uses;
+  ;; values here are structural (parity, not an external vector — the
+  ;; external-vector gate lives in btc-crypto's tx-test).
+  {:version 1
+   :inputs [{:txid #?(:clj (eth/hex->bytes "9f96ade4b41d5433f4eda31e1738ec2b36f6e7d1420d94a6af99801a88f7f7ff")
+                      :cljs nil)
+             :vout 0 :sequence 4294967294}]
+   :outputs [{:value 112340000
+              :script-pubkey #?(:clj (eth/hex->bytes "76a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac")
+                                :cljs nil)}]
+   :locktime 0})
+
+(deftest utxo-p2wpkh-tx-parity-signer-vs-privkey
+  (let [wrap {:tx utxo-tx :input-index 0 :amount 600000000 :script-type :p2wpkh}
+        via-key (w/sign-tx (w/account master :btc) wrap)
+        via-signer (w/sign-tx-with sgnr (w/account-with sgnr :btc) wrap)]
+    (is (= (mapv seq (:witness via-key)) (mapv seq (:witness via-signer))))
+    (is (seq (first (:witness via-signer))))))
+
+(deftest utxo-p2pkh-tx-parity-default-script-for-non-segwit
+  ;; Dogecoin has no SegWit — both paths must resolve the default to :p2pkh.
+  (let [wrap {:tx utxo-tx :input-index 0}
+        via-key (w/sign-tx (w/account master :doge) wrap)
+        via-signer (w/sign-tx-with sgnr (w/account-with sgnr :doge) wrap)]
+    (is (= (seq (:der-sig-with-type via-key)) (seq (:der-sig-with-type via-signer))))
+    (is (= (seq (:pubkey via-key)) (seq (:pubkey via-signer))))))
+
+(deftest utxo-signer-bch-still-receive-only
+  (is (= :wallet.chain/receive-only
+         (refusal-reason #(w/sign-tx-with sgnr (w/account-with sgnr :bch) {})))))
+
+;; ─── TRON: the EVM address re-wrapped, cross-checked mechanism to mechanism ─
+
+(deftest tron-address-is-the-keccak-address-in-base58check
+  (let [acct (w/account-with sgnr :trx)
+        pub64 (signer/public-key64 sgnr (:path acct))
+        payload (base58/decode-check (:address acct))]
+    (is (= "m/44'/195'/0'/0/0" (:path acct)))
+    (is (str/starts-with? (:address acct) "T"))
+    (is (= 21 (alength ^bytes payload)))
+    (is (= 0x41 (bit-and (aget ^bytes payload 0) 0xff)))
+    ;; cross-check: base58check payload == 0x41 ‖ last20(keccak256(pubkey)) —
+    ;; ties the TRON form to the independently verified keccak derivation
+    ;; (eth-crypto) through the independently verified base58check (btc-crypto)
+    (is (= (drop 12 (seq (eth/keccak256 pub64))) (drop 1 (seq payload))))
+    (is (= (eth/bytes->hex payload) (:hex-address acct)))
+    (is (= (dissoc (w/account master :trx) :private-key) acct))))
+
+(deftest tron-tx-refused-with-the-missing-mechanism-named
+  (is (= :wallet.chain/tx-format-not-implemented
+         (refusal-reason #(w/sign-tx (w/account master :trx) {}))))
+  (is (= :wallet.chain/tx-format-not-implemented
+         (refusal-reason #(w/sign-tx-with sgnr (w/account-with sgnr :trx) {})))))
 
 ;; ─── registry sanity: every entry is either derivable or explains itself ─
 
@@ -131,6 +187,7 @@
     (case (:status e)
       nil (case (:family e)
             :evm (is (and (:chain-id e) (:coin-type e)) (str k))
-            :utxo (is (and (:network e) (:coin-type e)) (str k)))
+            :utxo (is (and (:network e) (:coin-type e)) (str k))
+            :tron (is (:coin-type e) (str k)))
       :planned (is (string? (:needs e)) (str k " must name what it is waiting on"))
       :external (is (string? (:owner e)) (str k " must name its owner")))))

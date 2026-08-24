@@ -33,13 +33,16 @@ secp256k1 HD tree・BTC/LTC/DOGE/BCH アドレス/tx）と
 
 - `wallet.chains` — **チェーンは data**。CMC 主要ネットワークの registry
   （EVM: eth/bnb/polygon/avalanche/arbitrum/optimism/base、UTXO:
-  btc/ltc/doge/bch(受取専用)、外部所有: atom→saifu、staged:
-  sol/xrp/trx/ton/sui/apt/near/ada/dot/xmr — staged は捏造アドレスを
+  btc/ltc/doge/bch(受取専用)、TRON: trx(アドレス実装、tx は raw-data
+  protobuf 未実装を名指しして拒否)、外部所有: atom→saifu、staged:
+  sol/xrp/ton/sui/apt/near/ada/dot/xmr — staged は捏造アドレスを
   返さず、**待っている機構を名指しして拒否**する）
 - `wallet.chain` — `ChainDriver` protocol + family driver（`evm-driver` /
-  `utxo-driver`）+ `account`/`account-with`（BIP-44 パス導出）+
+  `utxo-driver` / `tron-driver`）+ `account`/`account-with`（BIP-44 パス導出）+
   `sign-tx`/`sign-tx-with`。EVM は EIP-155 legacy と EIP-1559 の両方、
-  tx の `:chain-id` は registry から注入し、不一致は**拒否**する
+  tx の `:chain-id` は registry から注入し、不一致は**拒否**する。
+  UTXO も signer seam で署名できる（legacy P2PKH / BIP-143 P2WPKH、
+  sighash と RFC-6979 署名は btc-crypto の BIP-143 公式ベクタ検証済み機構）
 - `wallet.signer` — Signer protocol（`public-key64` / `sign-digest!`）+
   `seed-signer` + `compress`
 - `wallet.siwe` — 本物の SIWE (EIP-4361): `message`、`sign-message`/

@@ -46,6 +46,14 @@
    :bch  {:family :utxo :symbol "BCH"  :name "Bitcoin Cash" :coin-type 145 :network :bitcoin-cash
           :receive-only? true}
 
+   ;; ── TRON (implemented for addresses — the TRON address IS the EVM
+   ;;    address re-wrapped: 0x41 ‖ last20(keccak256(pubkey)), base58check
+   ;;    with Bitcoin's sha256d checksum. Tx signing is REFUSED with the
+   ;;    missing mechanism named: raw-data protobuf assembly; the signature
+   ;;    itself (secp256k1 over sha256(raw-data)) the signer seam already
+   ;;    provides.) ─────────────────────────────────────────────────────────
+   :trx  {:family :tron :symbol "TRX" :name "TRON" :coin-type 195}
+
    ;; ── Cosmos family (external — kotoba-lang/saifu owns bech32 + SIGN_MODE_DIRECT) ──
    :atom {:family :cosmos :symbol "ATOM" :name "Cosmos Hub" :coin-type 118
           :status :external :owner "kotoba-lang/saifu"}
@@ -55,8 +63,6 @@
           :needs "SLIP-0010 ed25519 derivation (m/44'/501'/…') + base58 pubkey-as-address"}
    :xrp  {:family :xrp      :symbol "XRP"  :name "XRP Ledger" :coin-type 144 :status :planned
           :needs "ripple base58 alphabet + hash160 account id (secp256k1 key reusable)"}
-   :trx  {:family :tron     :symbol "TRX"  :name "TRON"       :coin-type 195 :status :planned
-          :needs "keccak address (as EVM) re-encoded base58check with 0x41 prefix"}
    :ton  {:family :ed25519  :symbol "TON"  :name "TON"        :coin-type 607 :status :planned
           :needs "ed25519 + TON wallet-contract address (workchain, stateInit hash)"}
    :sui  {:family :ed25519  :symbol "SUI"  :name "Sui"        :coin-type 784 :status :planned
