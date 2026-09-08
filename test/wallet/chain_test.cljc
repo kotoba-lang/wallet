@@ -6,7 +6,7 @@
   accounts -> different addresses, correct BIP-44 path strings) rather than
   external-vector checks."
   (:require [clojure.test :refer [deftest is]]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [btc-crypto.bip32 :as bip32]
             [btc-crypto.bip39 :as bip39]
             [wallet.chain :as w]))
