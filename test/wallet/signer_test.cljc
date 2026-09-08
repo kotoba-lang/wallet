@@ -7,7 +7,7 @@
   rejects. Refusals pin their :reason literal (repo rule: a check must have
   refused for the reason it names)."
   (:require [clojure.test :refer [deftest is]]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [btc-crypto.base58 :as base58]
             [btc-crypto.bip32 :as bip32]
             [btc-crypto.bip39 :as bip39]

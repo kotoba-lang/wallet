@@ -8,7 +8,7 @@
   tooling (siwe.js / viem / ethers) via `ecrecover` — this is what makes a
   wallet MetaMask/Coinbase-Wallet-compatible for dApp login, not just
   SIWE-shaped."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [eth-crypto.core :as eth]
             [wallet.signer :as signer]))
 
@@ -92,7 +92,7 @@
   (let [digest (personal-sign-digest msg)
         sig (eth/hex->bytes sig-hex)
         recovered (eth/ecrecover-checksum digest sig)]
-    (= (str/lower-case recovered) (str/lower-case expected-address))))
+    (= (str/lower recovered) (str/lower expected-address))))
 
 (defn parse-message
   "Parse an EIP-4361 plaintext (as produced by `message`) back into its

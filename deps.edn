@@ -5,7 +5,12 @@
 ;; (shared secp256k1 HD tree + BTC addresses/tx) and eth-crypto (ETH
 ;; addresses/tx/keccak) rather than re-deriving them.
 {:paths ["src"]
- :deps {io.github.kotoba-lang/btc-crypto {:git/sha "675f893826db1b01994c7ef9bf9002a2669d54da"}
+ :deps {
+        ;; kotoba.lang.text, not clojure.string. Pinned as an explicit floor:
+        ;; tools.deps takes the NEWEST sha it is shown, so without a floor here
+        ;; this repo silently rides whatever a sibling happens to name.
+        io.github.kotoba-lang/text {:git/sha "73bdb13ae7a3d004b44bca08be03a3191157a38f"}
+       io.github.kotoba-lang/btc-crypto {:git/sha "675f893826db1b01994c7ef9bf9002a2669d54da"}
         io.github.kotoba-lang/eth-crypto {:git/sha "2b0e56d28262eb1b513cee6c822a55714303f39a"}
         io.github.kotoba-lang/crypto     {:git/sha "c4f825c166c0095f7b020c503c56a0a1fb10af07"}}
  :aliases
