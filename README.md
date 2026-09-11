@@ -92,7 +92,7 @@ secp256k1 HD tree・BTC/LTC/DOGE/BCH アドレス/tx）と
 ## Test
 
 ```
-clojure -M:test
+kbb -M:test
 ```
 
 signer seam は **parity oracle** で検査している: signer 経路の出力が秘密鍵経路
